@@ -335,23 +335,88 @@ class DecoderLayer(nn.Module):
 
         if encoder_y is not None:
             # step3: 计算encoder-decoder attention分数
-            residual = encoder_y
+            # 注意这里的residual是x而不是encoder_y
+            residual = x
             x = self.multiHeadAttention(query=x, key=encoder_y, value=encoder_y, mask=encoder_mask)
-            
+
             # step4: add&norm
             x = self.dropout2(x)
             x = self.norm2(x + residual)
 
-        # 5. fnn
+        # step5: fnn
         residual = x
 
         x = self.positionWiseFeedForward(x)
         
-        # 6. add & norm
+        # step6: add & norm
         x = self.dropout3(x)
         x = self.norm3(x + residual)
 
         return x
+
+
+class Encoder(nn.Module):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+        # 首先这个部分包含两个embedding和6个encoderLayer
+        self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
+        self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
+
+        self.layers = nn.ModuleList(
+            [EncoderLayer(n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout) for _ in range(n_layers)]
+        )
+
+    def forward(self, x, mask):
+
+        x = self.tokenEmbedding(x)
+        x = x + self.positionalEncoding(x)
+
+        for layer in self.layers:
+            x = layer(x, mask)
+        
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+        # 首先这个部分包含两个embedding和6个decoderLayer
+        self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
+        self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
+
+        self.layers = nn.ModuleList(
+            [DecoderLayer(n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout) for _ in range(n_layers)]
+        )
+
+    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, encoder_mask: torch.Tensor):
+
+        x = self.tokenEmbedding(decoder_x)
+        x = x + self.positionalEncoding(x)
+
+        for layer in self.layers:
+            x = layer(x, encoder_y, decoder_mask, encoder_mask)
+        
+        return x
+
+
+class Transformer(nn.Module):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+        
+
+
+        self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
+        self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
+        
+        self.linear = nn.Linear(in_features=embedding_dim, out_features=vocab_size, bias=False)
+
+    def forward(self, enc_x, dec_x, enc_mask, dec_mask):
+
+        enc_y = self.encoder(enc_x, enc_mask)
+        dec_y = self.decoder(dec_x, enc_y, dec_mask, enc_mask)
+
+        output = self.linear(dec_y)
+
+        return output
+
+
 
 
 if __name__ == "__main__":
