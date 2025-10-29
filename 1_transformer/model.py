@@ -5,13 +5,9 @@ import argparse
 
 import torch
 import torch.nn as nn
-from torch.nn import funtional as F
+from torch.nn import functional as F
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
-
-from .dataset import MTDataset
-from .utils import get_attn_pad_mask, get_subsequent_mask
-from .utils import *
 
 
 class LayerNorm(nn.Module):
@@ -170,6 +166,9 @@ class ScaleDotProductAttention(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_head: int, embedding_dim: int):
+
+        super(MultiHeadAttention, self).__init__()
+
         self.n_head = n_head
         self.embedding_dim = embedding_dim
 
@@ -252,6 +251,9 @@ class PositionWiseFeedForward(nn.Module):
 
 class EncoderLayer(nn.Module):
     def __init__(self, n_head: int, embedding_dim: int, hidden_dim: int, dropout: float):
+        
+        super(EncoderLayer, self).__init__()
+        
         self.n_head = n_head
         self.embedding_dim = embedding_dim
 
@@ -298,6 +300,7 @@ class EncoderLayer(nn.Module):
 class DecoderLayer(nn.Module):
     def __init__(self, n_head: int, embedding_dim: int, hidden_dim: int, dropout: float):
         
+        super(DecoderLayer, self).__init__()
         self.maskMultiHeadAttention = MultiHeadAttention(n_head=n_head, embedding_dim=embedding_dim)
         self.norm1 = LayerNorm(embedding_dim=embedding_dim)
         self.dropout1 = nn.Dropout(p=dropout)
@@ -357,6 +360,8 @@ class DecoderLayer(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+        
+        super(Encoder, self).__init__()
         # 首先这个部分包含两个embedding和6个encoderLayer
         self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
         self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
@@ -378,6 +383,9 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+        
+        super(Decoder, self).__init__()
+
         # 首先这个部分包含两个embedding和6个decoderLayer
         self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
         self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
@@ -397,65 +405,45 @@ class Decoder(nn.Module):
         return x
 
 
+class OutputGenerator(nn.Module):
+    def __init__(self, embedding_dim: int, vocab_size: int):
+        """decoder的输出还需要经过一个线性变化和softmax操作
+
+        Parameters
+        ----------
+        embedding_dim : int
+            embedding的维度，通常是512等
+        vocab_size : int
+            词汇表vocab的大小
+        """
+        super(OutputGenerator, self).__init__()
+        self.proj = nn.Linear(embedding_dim, vocab_size)
+
+    def forward(self, x: torch.Tensor):
+        return F.log_softmax(self.proj(x), dim=-1)
+
+
 class Transformer(nn.Module):
     def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
         
-
+        super(Transformer, self).__init__()
 
         self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
         self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
-        
-        self.linear = nn.Linear(in_features=embedding_dim, out_features=vocab_size, bias=False)
+        self.generator = OutputGenerator(embedding_dim=embedding_dim, vocab_size=vocab_size)
+
+        self.reset_params()
 
     def forward(self, enc_x, dec_x, enc_mask, dec_mask):
 
         enc_y = self.encoder(enc_x, enc_mask)
         dec_y = self.decoder(dec_x, enc_y, dec_mask, enc_mask)
 
-        output = self.linear(dec_y)
+        output = self.generator(dec_y)
 
         return output
 
-
-
-
-if __name__ == "__main__":
-    # 设置命令行参数
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default="train", type=str, help="choose the mode: train or test")
-    parser.add_argument("--batch_size", default=64, type=int, help="set the batch size")
-    parser.add_argument("--lr", default=1e-3, type=float, help="set the learning rate")
-    parser.add_argument("--num_epochs", default=1, type=int, help="set the number of epochs")
-    parser.add_argument("--embedding_dim", default=128, type=int, help="set number of word embedding")
-    parser.add_argument("--gpu", default=0, type=int, help="refer to the GPU ID")
-    parser.add_argument("--head_num", default=8, type=int, help="set the multi head number")
-    parser.add_argument("--hidden_num", default=2048, type=int, help="set the hidden neural number")
-    parser.add_argument("--dropout", default=0.2, type=float, help="dropout rate, default=0.2")
-    parser.add_argument("--n_padding", default=50, type=int, help="set the padding length")
-    parser.add_argument("--model_path", type=str, help="refer to thr trained model path")
-
-    args = parser.parse_args()
-
-    # 指定device
-    if torch.cuda.is_available():
-        device = torch.device(f"cuda:{args.gpu}")
-        torch.cuda.set_device(args.gpu)
-    else:
-        device = torch.device("cpu")
-        if args.gpu >= 0:
-            print(f"Warning: GPU {args.gpu} is not available, using CPU instead")
-    
-    # 准备数据读取数据
-    trainData = MTDataset(n_padding=args.n_padding, mode="train")
-    validData = MTDataset(n_padding=args.n_padding, mode='valid')
-    testData = MTDataset(n_padding=args.n_padding, mode='test')
-
-    # 准备dataloader
-    trainDataLoader = DataLoader(trainData, batch_size=args.batch_size, shuffle=True, num_workers=32, drop_last=True)
-    validDataLoader = DataLoader(validData, batch_size=args.batch_size, shuffle=True, num_workers=32, drop_last=True)
-    testDataLoader = DataLoader(testData, batch_size=args.batch_size, shuffle=True, num_workers=32, drop_last=True)
-
-    # 对于Vocab来说，三种模式下的vocabZh和vocabEn都一样
-    zhVocabLen = trainData.getVocabZhLen()
-    enVocabLen = trainData.getVocabEnLen()
-
+    def reset_params(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
