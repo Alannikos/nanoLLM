@@ -9,7 +9,7 @@ import torch.nn as nn
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
-def get_attn_pad_mask(seq_q: torch.Tensor, seq_k: torch.Tensor):
+def get_attn_pad_mask(seq_q: torch.Tensor, seq_k: torch.Tensor, pad_idx: int):
     """因为可能在数据中使用了padding, 不希望pad被加入到注意力中进行计算
 
     Parameters
@@ -18,15 +18,17 @@ def get_attn_pad_mask(seq_q: torch.Tensor, seq_k: torch.Tensor):
         (batch_size, len_q)
     seq_k : torch.Tensor
         (batch_size, len_k)
+    pad_idx : int
+        pad所使用的idx
     """
 
-    batch_sie, len_q = seq_q.size()
+    batch_size, len_q = seq_q.size()
     _, len_k = seq_k.size()
 
     # (batch_size, 1, len_k)
-    pad_attn_mask = seq_k.eq(3).unsqueeze(1)
+    pad_attn_mask = seq_k.eq(pad_idx).unsqueeze(1)
 
-    pad_attn_mask.expand(batch_sie, len_q, len_k)
+    pad_attn_mask.expand(batch_size, len_q, len_k)
 
     return pad_attn_mask
 
@@ -49,8 +51,6 @@ def get_subsequent_mask(seq: torch.Tensor):
     subsequent_mask = torch.triu(torch.ones(attn_shape, dtype=torch.unit8), diagonal=1)
 
     return subsequent_mask
-
-
 
 def aggreVocab(filePaths: List[str], outputPath: str):
     """提取原始数据的词表，并且保存为字典文件
@@ -85,12 +85,25 @@ def aggreVocab(filePaths: List[str], outputPath: str):
     np.save(outputPath, vocabDict)
 
 def compute_bleu(translate, reference, references_lens):
-    pass
+    translate = translate.tolist()
+    reference = reference.tolist()
 
+    smooth = SmoothingFunction()
+    references_lens = references_lens.tolist()
+    bleu_score = []
 
+    for translate_sentence, reference_sentence, references_len in zip(translate, reference, references_lens):
+        if 1 in translate_sentence:
+            index = translate_sentence.index(1)
+        else:
+            index = len(translate_sentence)
+        
+        bleu_score.append(sentence_bleu([reference_sentence[:references_len]], translate_sentence[:index], weights=(0.3, 0.4, 0.3, 0.0), smoothing_function=smooth.method1))
+
+    return bleu_score
 
 if __name__ == "__main__":
 
     # 把训练集，验证集和测试集的所有词汇都提取出来，防止OOD
-    aggreVocab(['../data/train.en.tok', '../data/valid.en.tok', '../data/test.en.tok'], '../data/vocab_en_freq_2.npy')
-    aggreVocab(['../data/train.zh.tok', '../data/valid.zh.tok', '../data/test.zh.tok'], '../data/vocab_zh_freq_2.npy')
+    aggreVocab(['./data/train.en.tok', './data/valid.en.tok', './data/test.en.tok'], './data/vocab_en_freq_2.npy')
+    aggreVocab(['./data/train.zh.tok', './data/valid.zh.tok', './data/test.zh.tok'], './data/vocab_zh_freq_2.npy')

@@ -36,7 +36,6 @@ class LayerNorm(nn.Module):
         return out
 
 
-# 这里有的继承nn.Embedding?
 class TokenEmbedding(nn.Module):
     """
     在这个过程中，TokenEmbedding这个模块主要是建立一个嵌入向量的矩阵，
@@ -313,7 +312,7 @@ class DecoderLayer(nn.Module):
         self.norm3 = LayerNorm(embedding_dim=embedding_dim)
         self.dropout3 = nn.Dropout(p=dropout)
 
-    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, encoder_mask: torch.Tensor):
+    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
         """decoder的一个block的过程
 
         Parameters
@@ -324,7 +323,7 @@ class DecoderLayer(nn.Module):
             shape=(batch_size, source_len, embedding_dim)
         decoder_mask : torch.Tensor
             shape=(batch_size, target_len, target_len)
-        encoder_mask : torch.Tensor
+        enc_dec_mask : torch.Tensor
             shape=(batch_size, target_len, source_len)
         """
 
@@ -340,7 +339,7 @@ class DecoderLayer(nn.Module):
             # step3: 计算encoder-decoder attention分数
             # 注意这里的residual是x而不是encoder_y
             residual = x
-            x = self.multiHeadAttention(query=x, key=encoder_y, value=encoder_y, mask=encoder_mask)
+            x = self.multiHeadAttention(query=x, key=encoder_y, value=encoder_y, mask=enc_dec_mask)
 
             # step4: add&norm
             x = self.dropout2(x)
@@ -359,22 +358,15 @@ class DecoderLayer(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, hidden_dim: int, dropout: float):
         
         super(Encoder, self).__init__()
-        # 首先这个部分包含两个embedding和6个encoderLayer
-        self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
-        self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
 
         self.layers = nn.ModuleList(
             [EncoderLayer(n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout) for _ in range(n_layers)]
         )
 
     def forward(self, x, mask):
-
-        x = self.tokenEmbedding(x)
-        x = x + self.positionalEncoding(x)
-
         for layer in self.layers:
             x = layer(x, mask)
         
@@ -382,26 +374,19 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, hidden_dim: int, dropout: float):
         
         super(Decoder, self).__init__()
-
-        # 首先这个部分包含两个embedding和6个decoderLayer
-        self.tokenEmbedding = TokenEmbedding(embedding_dim=embedding_dim, vocab_size=vocab_size)
-        self.positionalEncoding = PositionalEncoding(embedding_dim=embedding_dim, dropout=dropout, max_len=max_len)
 
         self.layers = nn.ModuleList(
             [DecoderLayer(n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout) for _ in range(n_layers)]
         )
 
-    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, encoder_mask: torch.Tensor):
-
-        x = self.tokenEmbedding(decoder_x)
-        x = x + self.positionalEncoding(x)
+    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
 
         for layer in self.layers:
-            x = layer(x, encoder_y, decoder_mask, encoder_mask)
-        
+            x = layer(x, encoder_y, decoder_mask, enc_dec_mask)
+
         return x
 
 
@@ -414,7 +399,7 @@ class OutputGenerator(nn.Module):
         embedding_dim : int
             embedding的维度，通常是512等
         vocab_size : int
-            词汇表vocab的大小
+            target词汇表vocab的大小
         """
         super(OutputGenerator, self).__init__()
         self.proj = nn.Linear(embedding_dim, vocab_size)
@@ -422,28 +407,55 @@ class OutputGenerator(nn.Module):
     def forward(self, x: torch.Tensor):
         return F.log_softmax(self.proj(x), dim=-1)
 
-
 class Transformer(nn.Module):
-    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
+    def __init__(self, n_layers: int, n_head: int, embedding_dim: int, src_vocab_size: int, \
+                 tgt_vocab_size: int, hidden_dim: int, max_len: int, dropout: float):
         
         super(Transformer, self).__init__()
 
-        self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
-        self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
-        self.generator = OutputGenerator(embedding_dim=embedding_dim, vocab_size=vocab_size)
+        # Embedding层
+        self.src_embedding = TokenEmbedding(embedding_dim, src_vocab_size)
+        self.tgt_embedding = TokenEmbedding(embedding_dim, tgt_vocab_size)
+
+        # Positional Encoding
+        self.positional_encoding = PositionalEncoding(embedding_dim, dropout, max_len)
+
+        self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=src_vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
+        self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=tgt_vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
+        self.generator = OutputGenerator(embedding_dim=embedding_dim, vocab_size=tgt_vocab_size)
 
         self.reset_params()
 
-    def forward(self, enc_x, dec_x, enc_mask, dec_mask):
+    def encode(self, src_seq, src_mask):
+        src_emb = self.src_embedding(src_seq)
+        src_emb = src_emb + self.positional_encoding(src_emb)
 
-        enc_y = self.encoder(enc_x, enc_mask)
-        dec_y = self.decoder(dec_x, enc_y, dec_mask, enc_mask)
+        memory = self.encoder(src_emb, src_mask)
 
-        output = self.generator(dec_y)
+        return memory
+
+    def decode(self, tgt_seq, memory, tgt_mask, enc_dec_mask):
+        tgt_emb = self.tgt_embedding(tgt_seq)
+        tgt_emb = tgt_emb + self.positional_encoding(tgt_emb)
+
+        decoder_output = self.decoder(tgt_emb, memory, tgt_mask, enc_dec_mask)
+
+        return decoder_output
+
+    def forward(self, enc_x: torch.Tensor, dec_x: torch.Tensor, \
+                enc_mask: torch.Tensor, dec_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
+        
+        memory = self.ecode(enc_x, enc_mask)
+        decoder_output = self.decode(dec_x, memory, dec_mask, enc_dec_mask)
+
+        output = self.generator(decoder_output)
 
         return output
 
     def reset_params(self):
+        """用来初始化参数
+        """
+        
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
