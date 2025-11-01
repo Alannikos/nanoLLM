@@ -24,12 +24,12 @@ class MTDataset(Dataset):
         self.n_padding = n_padding
 
         # 读取词表文件
-        self.vocab_zh = np.load("../data/vocab_zh.npy").item()
-        self.vocab_en = np.load("../data/vocab_en.npy").item()
+        self.vocab_zh = np.load("./data/vocab_zh.npy", allow_pickle=True).item()
+        self.vocab_en = np.load("./data/vocab_en.npy", allow_pickle=True).item()
 
         # 读取数据文件
-        self.data_zh = self._getData(f"../data/{mode}.zh.tok", language="zh")
-        self.data_en = self._getData(f"../data/{mode}.en.tok", language="en")
+        self.data_zh = self._getData(f"./data/{mode}.zh.tok", language="zh")
+        self.data_en = self._getData(f"./data/{mode}.en.tok", language="en")
 
     def _getData(self, file_path: str, language: str):
         """读取数据文件，并将其转化为词表对应的index
@@ -52,7 +52,7 @@ class MTDataset(Dataset):
             if language == "en":
                 dataset.append([self.vocab_en.get(x, 2) for x in sentence.split(" ")])
             else:
-                dataset.append([self.vocab_en.get(x, 2) for x in sentence.split(" ")])
+                dataset.append([self.vocab_zh.get(x, 2) for x in sentence.split(" ")])  # 注意这里是zh
 
         return dataset
 
@@ -62,7 +62,7 @@ class MTDataset(Dataset):
     def getVocabZhLen(self):
         return len(self.vocab_zh)
     
-    def getVocabEnLan(self):
+    def getVocabEnLen(self):
         return len(self.vocab_en)
     
     # 记得修一下这里的type
@@ -86,17 +86,17 @@ class MTDataset(Dataset):
         len_zh = len(zh) - 1
 
         # 对句子进行padding
-        if len(zh) < self.padding:
-            zh.extend([3] * (self.padding - len(zh)))
+        if len(zh) < self.n_padding:
+            zh.extend([3] * (self.n_padding - len(zh)))
         else:
-            zh = zh[:self.padding]
+            zh = zh[:self.n_padding]
 
         if len(en) < self.n_padding:
             en.extend([3] * (self.n_padding - len(en)))
         else:
-            en = en[:self.padding]
+            en = en[:self.n_padding]
         
-        zh = torch.tensot(zh)
+        zh = torch.tensor(zh)
         en = torch.tensor(en)
 
         # 训练用的zh[:-1], 作为目标的zh[1:]

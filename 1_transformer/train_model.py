@@ -10,7 +10,7 @@ from typing import Dict
 
 import torch
 import torch.nn as nn
-from torch.nn import funtional as F
+from torch.nn import functional as F
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
@@ -20,37 +20,61 @@ from utils import get_attn_pad_mask, get_subsequent_mask, compute_bleu
 
 warnings.filterwarnings("ignore")
 
-def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim.optimizer, criterion: nn.Module, device: torch.device, pad_idx: int):
+def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim.Optimizer, criterion: nn.Module, device: torch.device, pad_idx: int):
     model.train()
     total_loss = 0
     batch_count = 0
 
-    for batch_idx, (src_seq, tgt_seq, tgt_seq_y, tgt_lens) in enumerate(tqdm(dataloader, desc="Training")):
+    for batch_idx, (english_seq, chinese_seq, chinese_seq_y, chinese_lens) in enumerate(tqdm(dataloader, desc="Training")):
         batch_count += 1
 
-        src_seq = src_seq.to(device)
-        tgt_seq = tgt_seq.to(device)
-        tgt_seq_y = tgt_seq_y.to(device)
+        if (chinese_seq >= 97027).any() or (chinese_seq < 0).any():
+            print("中文序列中有非法索引")
+            break
+
+        if (english_seq >= 169451).any() or (english_seq < 0).any():
+            print("英文序列中有非法索引")
+            print(f"最大索引: {english_seq.max().item()}, 英文词汇表大小: 169451")
+            print(f"最小索引: {english_seq.min().item()}")
+            
+            # 找出具体的非法索引
+            illegal_indices = (english_seq >= 169451) | (english_seq < 0)
+            illegal_values = english_seq[illegal_indices]
+            print(f"非法索引值: {illegal_values.unique()}")
+            
+            # 临时修复：将非法索引替换为UNK token（假设UNK=1）
+            english_seq = torch.where(illegal_indices, torch.tensor(1, device=english_seq.device), english_seq)
+            print("已临时将非法索引替换为UNK token")
+
+        english_seq = english_seq.to(device)
+        chinese_seq = chinese_seq.to(device)
+        chinese_seq_y = chinese_seq_y.to(device)
 
         # 创建掩码
-        enc_mask = get_attn_pad_mask(src_seq, src_seq, pad_idx)
-        dec_self_mask = get_attn_pad_mask(tgt_seq, tgt_seq, pad_idx) & get_subsequent_mask(tgt_seq)
+        enc_mask = get_attn_pad_mask(english_seq, english_seq, pad_idx).to(device)
+        dec_mask = get_attn_pad_mask(chinese_seq, chinese_seq, pad_idx).to(device) | get_subsequent_mask(chinese_seq).to(device)
         # 这个和enc_mask有什么区别呢？
-        dec_enc_mask = get_attn_pad_mask(tgt_seq, src_seq, pad_idx)
+        enc_dec_mask = get_attn_pad_mask(chinese_seq, english_seq, pad_idx).to(device)
+
+        # print(dec_mask);exit()
 
         # 前向传播
-        output = model(src_seq, tgt_seq, enc_mask, dec_self_mask, dec_enc_mask)
+        output = model(english_seq, chinese_seq, enc_mask, dec_mask, enc_dec_mask)
 
         # 计算损失
         output = output.contiguous().view(-1, output.size(-1))
-        tgt_seq_y = tgt_seq_y.contiguous().view(-1)
-        loss = criterion(output, tgt_seq_y)
+        chinese_seq_y = chinese_seq_y.contiguous().view(-1)
+        loss = criterion(output, chinese_seq_y)
 
         # 反向传播
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        # 每 100 个批次清理一次缓存
+        if batch_idx % 100 == 0:
+            torch.cuda.empty_cache()
 
         total_loss += loss.item()
     
@@ -63,34 +87,34 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
     bleu_scores = []
 
     with torch.no_grad():
-        for batch_idx, (src_seq, tgt_seq, tgt_seq_y, tgt_lens) in enumerate(tqdm(dataloader, desc="Validating")):
+        for batch_idx, (english_seq, chinese_seq, chinese_seq_y, chinese_lens) in enumerate(tqdm(dataloader, desc="Validating")):
             batch_count += 1
 
-            src_seq = src_seq.to(device)
-            tgt_seq = tgt_seq.to(device)
-            tgt_seq_y = tgt_seq_y.to(device)
+            english_seq = english_seq.to(device)
+            chinese_seq = chinese_seq.to(device)
+            chinese_seq_y = chinese_seq_y.to(device)
 
             # 创建掩码
-            enc_mask = get_attn_pad_mask(src_seq, src_seq, pad_idx)
-            dec_self_mask = get_attn_pad_mask(tgt_seq, tgt_seq, pad_idx) & get_subsequent_mask(tgt_seq)
-            dec_enc_mask = get_attn_pad_mask(tgt_seq, src_seq, pad_idx)
+            enc_mask = get_attn_pad_mask(english_seq, english_seq, pad_idx).to(device)
+            dec_mask = get_attn_pad_mask(chinese_seq, chinese_seq, pad_idx).to(device) | get_subsequent_mask(chinese_seq).to(device)
+            enc_dec_mask = get_attn_pad_mask(chinese_seq, english_seq, pad_idx).to(device)
 
             # 前向传播
-            output = model(src_seq, tgt_seq, enc_mask, dec_self_mask, dec_enc_mask)
+            output = model(english_seq, chinese_seq, enc_mask, dec_mask, enc_dec_mask)
             
             # 计算损失
             output_flat = output.contiguous().view(-1, output.size(-1))
-            tgt_seq_y_flat = tgt_seq_y.contiguous().view(-1)
-            loss = criterion(output_flat, tgt_seq_y_flat)
+            chinese_seq_y_flat = chinese_seq_y.contiguous().view(-1)
+            loss = criterion(output_flat, chinese_seq_y_flat)
             total_loss += loss.item()
 
             # 推理模式计算BLEU
-            translations = generate_translations(model, src_seq, enc_mask, device, pad_idx, max_len)
-            bleu_scores.extend(compute_bleu(translations, tgt_seq_y, tgt_lens))
+            translations = generate_translations(model, english_seq, enc_mask, device, pad_idx, max_len)
+            bleu_scores.extend(compute_bleu(translations, chinese_seq_y, chinese_lens))
 
             # 打印示例
             if batch_idx % 10 == 0:
-                print_example(src_seq[0], translations[0], tgt_seq_y[0], index2word_en, index2word_zh, tgt_lens[0])
+                print_example(english_seq[0], translations[0], chinese_seq_y[0], index2word_en, index2word_zh, chinese_lens[0])
             
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0
     return total_loss / batch_count, avg_bleu
@@ -106,8 +130,8 @@ def generate_translations(model, enc_x, enc_mask, device, pad_idx, max_len=50):
     
     # 自回归生成
     for i in range(max_len - 1):
-        dec_self_attn_mask = get_attn_pad_mask(dec_x, dec_x, pad_idx) | get_subsequent_mask(dec_x)
-        enc_dec_attn_mask = get_attn_pad_mask(dec_x, enc_x, pad_idx)
+        dec_self_attn_mask = get_attn_pad_mask(dec_x, dec_x, pad_idx).to(device) | get_subsequent_mask(dec_x).to(device)
+        enc_dec_attn_mask = get_attn_pad_mask(dec_x, enc_x, pad_idx).to(device)
         
         output = model.decode(dec_x, memory, dec_self_attn_mask, enc_dec_attn_mask)
         prob = model.generator(output[:, -1:])
@@ -121,34 +145,15 @@ def generate_translations(model, enc_x, enc_mask, device, pad_idx, max_len=50):
     
     return dec_x
 
-def print_example(enc_seq, trans_seq, ref_seq, enc_len, ref_len, index2word_en, index2word_zh):
-    # 获取原文
-    enc_words = []
-    for i in range(min(enc_len, len(enc_seq))):
-        word = index2word_en.get(enc_seq[i].item(), '<UNK>')
-        if word == '<EOS>':
-            break
-        enc_words.append(word)
+def print_example(src_seq, translation, reference, index2word_en, index2word_zh, ref_len):
+    """打印翻译示例"""
+    src_sentence = " ".join([index2word_en.get(x.item(), "<UNK>") for x in src_seq if x.item() != 3])
+    trans_sentence = "".join([index2word_zh.get(x.item(), "<UNK>") for x in translation if x.item() not in [0, 1, 3]])
+    ref_sentence = "".join([index2word_zh.get(x.item(), "<UNK>") for x in reference[:ref_len] if x.item() != 3])
     
-    # 获取机翻译文
-    trans_words = []
-    for i in range(len(trans_seq)):
-        word = index2word_zh.get(trans_seq[i].item(), '<UNK>')
-        if word == '<EOS>':
-            break
-        trans_words.append(word)
-    
-    # 获取参考译文
-    ref_words = []
-    for i in range(min(ref_len, len(ref_seq))):
-        word = index2word_zh.get(ref_seq[i].item(), '<UNK>')
-        if word == '<EOS>':
-            break
-        ref_words.append(word)
-
-    print(f"原文: {' '.join(enc_words)}")
-    print(f"机翻译文: {''.join(trans_words)}")
-    print(f"参考译文: {''.join(ref_words)}")
+    print("原文:", src_sentence)
+    print("机翻译文:", trans_sentence)
+    print("参考译文:", ref_sentence)
     print("-" * 50)
 
 def test_model(model, test_loader, device, pad_idx, index2word_zh, index2word_en, output_file=None):
@@ -222,14 +227,14 @@ def test_model(model, test_loader, device, pad_idx, index2word_zh, index2word_en
 
 def main(args):
     # 指定device
-    if torch.cuda.is_available():
+    if args.gpu >= 0 and torch.cuda.is_available():
         device = torch.device(f"cuda:{args.gpu}")
         torch.cuda.set_device(args.gpu)
     else:
         device = torch.device("cpu")
         if args.gpu >= 0:
             print(f"Warning: GPU {args.gpu} is not available, using CPU instead")
-    
+
     print(f"Using device: {device}")
 
     # 准备数据读取数据
@@ -262,6 +267,8 @@ def main(args):
         max_len=args.n_padding,
         dropout=args.dropout
     )
+
+    # print(model);exit()
 
     model = model.to(device)
 
@@ -300,6 +307,9 @@ def main(args):
                                                        index2word_en=index2word_en)
                 valid_losses.append(valid_loss)
                 bleu_scores.append(bleu_score)
+
+                # 更新学习率
+                scheduler.step()
 
                 # 打印和记录结果
                 epoch_log = (f"Epoch {epoch+1}: Train Loss: {train_loss:.4f}, "

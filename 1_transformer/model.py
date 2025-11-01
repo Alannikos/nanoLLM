@@ -218,7 +218,7 @@ class MultiHeadAttention(nn.Module):
 
         output = self.Wo(attention_output)
 
-        return output, attention_weights
+        return output
 
 
 class PositionWiseFeedForward(nn.Module):
@@ -241,7 +241,7 @@ class PositionWiseFeedForward(nn.Module):
             nn.Linear(hidden_dim, embedding_dim)
         )
 
-    def forwrd(self, x):
+    def forward(self, x):
 
         # shape = (batch_size, seq_len, embedding_dim)
         out = self.fc(x)
@@ -382,7 +382,7 @@ class Decoder(nn.Module):
             [DecoderLayer(n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout) for _ in range(n_layers)]
         )
 
-    def forward(self, decoder_x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
+    def forward(self, x: torch.Tensor, encoder_y: torch.Tensor, decoder_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
 
         for layer in self.layers:
             x = layer(x, encoder_y, decoder_mask, enc_dec_mask)
@@ -420,8 +420,8 @@ class Transformer(nn.Module):
         # Positional Encoding
         self.positional_encoding = PositionalEncoding(embedding_dim, dropout, max_len)
 
-        self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=src_vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
-        self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, vocab_size=tgt_vocab_size, hidden_dim=hidden_dim, max_len=max_len, dropout=dropout)
+        self.encoder = Encoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout)
+        self.decoder = Decoder(n_layers=n_layers, n_head=n_head, embedding_dim=embedding_dim, hidden_dim=hidden_dim, dropout=dropout)
         self.generator = OutputGenerator(embedding_dim=embedding_dim, vocab_size=tgt_vocab_size)
 
         self.reset_params()
@@ -445,7 +445,7 @@ class Transformer(nn.Module):
     def forward(self, enc_x: torch.Tensor, dec_x: torch.Tensor, \
                 enc_mask: torch.Tensor, dec_mask: torch.Tensor, enc_dec_mask: torch.Tensor):
         
-        memory = self.ecode(enc_x, enc_mask)
+        memory = self.encode(enc_x, enc_mask)
         decoder_output = self.decode(dec_x, memory, dec_mask, enc_dec_mask)
 
         output = self.generator(decoder_output)

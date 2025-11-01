@@ -26,11 +26,11 @@ def get_attn_pad_mask(seq_q: torch.Tensor, seq_k: torch.Tensor, pad_idx: int):
     _, len_k = seq_k.size()
 
     # (batch_size, 1, len_k)
-    pad_attn_mask = seq_k.eq(pad_idx).unsqueeze(1)
+    pad_attn_mask = seq_k.eq(pad_idx).unsqueeze(1).bool()
 
     pad_attn_mask.expand(batch_size, len_q, len_k)
 
-    return pad_attn_mask
+    return pad_attn_mask.bool()
 
 def get_subsequent_mask(seq: torch.Tensor):
     """生成因果mask
@@ -48,11 +48,11 @@ def get_subsequent_mask(seq: torch.Tensor):
     # [0, 0, 1, 1],
     # [0, 0, 0, 1],
     # [0, 0, 0, 0]]]
-    subsequent_mask = torch.triu(torch.ones(attn_shape, dtype=torch.unit8), diagonal=1)
+    subsequent_mask = torch.triu(torch.ones(attn_shape, dtype=torch.bool), diagonal=1)
 
     return subsequent_mask
 
-def aggreVocab(filePaths: List[str], outputPath: str):
+def aggreVocab(filePaths: List[str], outputPath1: str, outputPath2: str):
     """提取原始数据的词表，并且保存为字典文件
 
     Parameters
@@ -60,7 +60,7 @@ def aggreVocab(filePaths: List[str], outputPath: str):
     filePaths : List[str]
         输入文件位置
     outputPath : str
-        保存文件的位置
+        保存文件的位置， 1是vocab，2是index和word的转换表
     """
 
     # 存储所有的词汇
@@ -73,16 +73,25 @@ def aggreVocab(filePaths: List[str], outputPath: str):
                 words = line.strip().split(" ")
                 for word in words:
                     vocabList.append(word)
-    
+
     # vocabSet就是词表
     vocabSet = set(vocabList)
 
     # vocabDict存储{word:index}二元组
     vocabDict = {'<START>': 0, '<END>': 1, 'UNK': 2, 'PAD': 3}
     for index, word in enumerate(vocabSet):
+
+        if (index + 4 >= 169000):
+            print(index + 4, word)
+
         vocabDict[word] = index + 4
+
+    print("vocabSet size : ", len(vocabDict))
     
-    np.save(outputPath, vocabDict)
+    index2word = {value:key for key,value in vocabDict.items()}
+
+    np.save(outputPath1, vocabDict)
+    np.save(outputPath2, index2word)
 
 def compute_bleu(translate, reference, references_lens):
     translate = translate.tolist()
@@ -97,7 +106,7 @@ def compute_bleu(translate, reference, references_lens):
             index = translate_sentence.index(1)
         else:
             index = len(translate_sentence)
-        
+
         bleu_score.append(sentence_bleu([reference_sentence[:references_len]], translate_sentence[:index], weights=(0.3, 0.4, 0.3, 0.0), smoothing_function=smooth.method1))
 
     return bleu_score
@@ -105,5 +114,5 @@ def compute_bleu(translate, reference, references_lens):
 if __name__ == "__main__":
 
     # 把训练集，验证集和测试集的所有词汇都提取出来，防止OOD
-    aggreVocab(['./data/train.en.tok', './data/valid.en.tok', './data/test.en.tok'], './data/vocab_en_freq_2.npy')
-    aggreVocab(['./data/train.zh.tok', './data/valid.zh.tok', './data/test.zh.tok'], './data/vocab_zh_freq_2.npy')
+    aggreVocab(['./data/train.en.tok', './data/valid.en.tok', './data/test.en.tok'], './data/vocab_en.npy', './data/index2word_en.npy')
+    # aggreVocab(['./data/train.zh.tok', './data/valid.zh.tok', './data/test.zh.tok'], './data/vocab_zh.npy', './data/index2word_zh.npy')
