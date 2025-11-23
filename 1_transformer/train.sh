@@ -1,0 +1,11 @@
+python train_model.py --mode="train" \
+                        --batch_size=64 \
+                        --lr=0.001 \
+                        --num_epochs=100 \
+                        --embedding_dim=512 \
+                        --hidden_num=2048 \
+                        --gpu=2 \
+                        --head_num=8 \
+                        --dropout=0.1 \
+                        --n_layers=1 \
+                        --n_padding=128

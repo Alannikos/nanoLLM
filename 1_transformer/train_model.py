@@ -115,13 +115,13 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             # 打印示例
             if batch_idx % 10 == 0:
                 print_example(english_seq[0], translations[0], chinese_seq_y[0], index2word_en, index2word_zh, chinese_lens[0])
-            
+
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0
     return total_loss / batch_count, avg_bleu
 
 def generate_translations(model, enc_x, enc_mask, device, pad_idx, max_len=50):
     batch_size = enc_x.size(0)
-    
+
     # 初始化解码器输入（开始符号）
     dec_x = torch.ones(batch_size, 1).fill_(0).long().to(device)  # 假设0是开始符号
     
@@ -320,7 +320,7 @@ def main(args):
                 # 保存最佳模型
                 if bleu_score > best_bleu:
                     best_bleu = bleu_score
-                    model_dir = "../data/model"
+                    model_dir = "./data/model"
                     os.makedirs(model_dir, exist_ok=True)
                     model_path = os.path.join(model_dir, 
                                             f"transformer_best_bleu_{bleu_score:.4f}.pth")
